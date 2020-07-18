@@ -1,0 +1,324 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Fri Jul 17 09:53:30 2020
+
+@author: Wenqing Zhong
+"""
+
+import glob
+import os
+import string
+import decimal
+from itertools import islice
+
+#location is where the email files are, put a "r" at the begining of the path when calling 
+#os.path.join(os.getcwd(), filename)
+def word_stemming_folder(location):    
+    nopunc=[]# list of words without punctuations
+    for filename in glob.glob(os.path.join(location, '*.txt')):
+        f=open(filename,errors='ignore') 
+       
+        words = f.read().split()
+        l = " " * len(string.punctuation)
+        table = str.maketrans(string.punctuation,l) #replace punctuations with blank spaces
+        nopunc= nopunc + [w.translate(table) for w in words]            
+        f.close()
+            
+    clean=[]
+    trailing=["ing","ed","es","s"]
+    
+    for i in nopunc:
+        j = i.replace(' ','').lower() #remove blanck spaces and numbers, change all words to lower case
+        if (j!= "" and j.isnumeric()==False):
+            k=j
+            for t in trailing:
+                if (j.endswith(t)==True):
+                    k=j.replace(t,'') #remove trailing forms
+                    break
+            clean.append(k)                 
+    return clean
+
+def word_stemming_file(filename):   
+    nopunc=[]        
+    f=open(filename,errors='ignore') 
+    words = f.read().split()
+    l = " " * len(string.punctuation)
+    table = str.maketrans(string.punctuation,l) #replace punctuations with blank spaces
+    nopunc= nopunc + [w.translate(table) for w in words]            
+    f.close()
+            
+    clean=[]
+    trailing=["ing","ed","es","s"]
+    
+    for i in nopunc:
+        j = i.replace(' ','').lower() #remove blanck spaces and numbers, change all words to lower case
+        if (j!= "" and j.isnumeric()==False):
+            k=j
+            for t in trailing:
+                if (j.endswith(t)==True):
+                    k=j.replace(t,'') #remove trailing forms
+                    break
+            clean.append(k)                 
+    return clean
+
+
+
+
+
+def bag_of_words_folder(location):
+    stemmed=word_stemming_folder(location)
+    bag={} #create a dictionary with (word,frequency) pairs
+    for i in range(len(stemmed)):
+        try:
+            bag[stemmed[i]]=bag[stemmed[i]]+decimal.Decimal(1)
+        except KeyError:
+            bag[stemmed[i]] = decimal.Decimal(1)
+        
+    return bag
+
+def bag_of_words_file(location):
+    stemmed=word_stemming_file(location)
+    bag={} #create a dictionary with (word,frequency) pairs
+    for i in range(len(stemmed)):
+        try:
+            bag[stemmed[i]]=bag[stemmed[i]]+decimal.Decimal(1)
+        except KeyError:
+            bag[stemmed[i]] = decimal.Decimal(1)        
+    return bag
+
+def final_bags(locationham,locationspam):
+    bagham=bag_of_words_folder(locationham)
+    bagspam=bag_of_words_folder(locationspam)    
+    keyham=bagham.keys()
+    keyspam=bagspam.keys()
+
+    #if a word is in one bag but not in the other bag, add it to the other bag with frequency=0
+    for i in keyham:
+        if ((i in bagspam)==False):
+            bagspam.update({i:0})
+               
+    for j in keyspam:
+        if ((j in bagham)==False):
+            bagham.update({j:0})      
+    
+    return bagham,bagspam
+
+#get fractions of word frequency
+def cal_freq_bag_file(filename):
+    bag=bag_of_words_file(filename)
+    length=decimal.Decimal(sum(bag.values()))
+    for key,value in bag.items():
+        bag.update({key:decimal.Decimal(value/length)})        
+    return bag       
+
+
+def cal_freq_bags(locationham,locationspam):
+    bagham,bagspam=final_bags(locationham,locationspam)
+    lenham=decimal.Decimal(sum(bagham.values()))
+    lenspam=decimal.Decimal(sum(bagspam.values()))
+    
+    for key,value in bagham.items():
+        bagham.update({key:decimal.Decimal(value/lenham)})
+        
+    for key,value in bagspam.items():
+        bagspam.update({key:decimal.Decimal(value/lenspam)})
+        
+    return bagham,bagspam
+
+
+#input:training ham files, training spam files, testfiles
+def naive_Bayes(locationham,locationspam,locationtest):
+     pathham, dirsham, filesham = next(os.walk(locationham))
+     pathspam, dirsspam, filesspam = next(os.walk(locationspam))
+     
+     pham = decimal.Decimal(len(filesham)/(len(filesspam)+len(filesham))) #P(y=ham)
+     pspam = decimal.Decimal(1-pham) #P(y=spam)
+     
+     bagham,bagspam=cal_freq_bags(locationham,locationspam)
+     results=[]
+     
+     for filename in glob.glob(os.path.join(locationtest, '*.txt')):        
+        testwords=word_stemming_file(filename)          
+        isham=decimal.Decimal(1)
+        isspam=decimal.Decimal(1)
+        result=""
+        for t in testwords:
+            if t in bagham:
+                isham=isham*bagham.get(t)*pham #P[X=x|Y=y]*P[Y=y]
+                isspam=isspam*bagspam.get(t)*pspam
+                
+                if(isspam==0 and isham!=0):                    
+                    result=("not spam")
+                    break                                    
+                            
+                if(isspam!=0 and isham==0):
+                    result=("spam")
+                    break
+                
+                if(isspam==0 and isham==0):
+                    result=("spam")
+                    break
+            else:
+                continue
+                    
+        results.append(result)      
+           
+     #print(results)
+     return results
+ 
+#kNN get similarity between a training file and the test file   
+def get_distance_file(filename,test):
+       frebag=cal_freq_bag_file(filename)
+       distance=0
+       for key in test.keys():
+           if key in frebag:
+              distance=distance+(abs(frebag.get(key)-test.get(key)))#cal probability difference for one word
+           else:
+              distance=distance+100 #if the given word doesn't exist, increase distance
+       return distance
+
+#find k nearest neighbors in one category, ham has label 1, spam has label 0 
+def find_kNN_one_category(location,label,testwords,k):
+    N=[]
+    NN={}
+    for filename in glob.glob(os.path.join(location, '*.txt')):
+        distance=get_distance_file(filename,testwords)        
+        N.append(distance)
+        N.sort()
+    for i in range(k):
+        NN.update({N[i]:label})
+    return NN
+
+def find_Major_label_kNN(locationham,locationspam,testwords,k):
+    result=""
+    distanceham=find_kNN_one_category(locationham,1,testwords,k)
+    distancespam=find_kNN_one_category(locationspam,0,testwords,k)
+    distance={**distanceham,**distancespam}#merge k nearest neighbors in ham and k nearest neighbors in spam
+    
+    d=list(distance.keys())
+    d.sort()
+    countham=0
+    countspam=0
+    #find kNN and check which label is the majority
+    for i in range(k):
+        if(distance.get(d[i])==1):
+            countham=countham+1
+        else:
+            countspam=countspam+1
+            
+    if(countham>countspam):
+        result="not spam"
+    else:
+        result="spam"
+        
+    return result  
+ 
+def k_NN(locationham,locationspam,locationtest,k):
+   # bagham,bagspam=cal_freq_bags(locationham,locationspam)
+    results=[]
+    for filename in glob.glob(os.path.join(locationtest, '*.txt')):        
+        testwords=cal_freq_bag_file(filename) 
+        result=find_Major_label_kNN(locationham,locationspam,testwords,k)
+        
+        results.append(result)       
+    #print(results)
+    return results   
+
+#desicion tree
+def build_decision_tree(locationham,locationspam,D):
+    decision_nodes=[]
+    bagham,bagspam=cal_freq_bags(locationham,locationspam)
+    #find N most frequent words in ham and spam respectively 
+    sorted(bagham.items(), key=lambda x: x[1], reverse=True)
+    hamsigwords = list(islice(bagham.keys(), D))
+    sorted(bagspam.items(), key=lambda x: x[1], reverse=True)
+    spamsigwords = list(islice(bagspam.keys(), D))
+    
+    decision_nodes.append(hamsigwords)
+    decision_nodes.append(spamsigwords)
+    
+    return decision_nodes
+
+def Decision_tree(locationham,locationspam,locationtest,D):
+    results=[]
+    decision_tree=build_decision_tree(locationham,locationspam,D)
+    for filename in glob.glob(os.path.join(locationtest, '*.txt')):
+        result=""
+        testwords=word_stemming_file(filename)
+        score=0
+        #if the test file has some of the most frequent words in ham training data, increase score 
+        for i in decision_tree[0]:
+            if ((i in testwords)== True):
+                score=score+1
+                
+        #if the test file has some of the most frequent words in spam training data, decrease score 
+        for j in decision_tree[1]:
+            if ((j in testwords)== True):
+                score=score-1
+        if(score>0):
+            result="not spam"
+        else:
+            result="spam"
+        results.append(result)
+                
+    #print(results)        
+    return results
+
+def accurate(truelabel,estlabel):
+    result=False
+    if(truelabel == "ham" and estlabel =="not spam"):
+        result=True
+    if(truelabel == "spam" and estlabel =="spam"):
+        result=True        
+    return result
+
+def test_accuracy(locationham,locationspam,locationtest,k,D):
+    truelabels=[]
+    for filename in glob.glob(os.path.join(locationtest, '*.txt')):
+        label=str(filename.split("\\")[-1].split(".")[-2])
+        truelabels.append(label)
+    
+    Bayes=naive_Bayes(locationham,locationspam,locationtest)
+    Bayes_score=0
+    Bayes_accuracy=0
+    
+    KNN=k_NN(locationham,locationspam,locationtest,k)
+    KNN_score=0
+    KNN_accuracy=0
+    
+    DT=Decision_tree(locationham,locationspam,locationtest,D)
+    DT_score=0
+    DT_accuracy=0
+    
+    for i in range(len(truelabels)):
+        if (accurate(truelabels[i],Bayes[i])==True):
+            Bayes_score=Bayes_score+1
+        if (accurate(truelabels[i],KNN[i])==True):
+            KNN_score=KNN_score+1
+        if (accurate(truelabels[i],DT[i])==True):
+            DT_score=DT_score+1
+            
+    Bayes_accuracy=Bayes_score/len(truelabels)
+    KNN_accuracy=KNN_score/len(truelabels)
+    DT_accuracy=DT_score/len(truelabels)
+    print("Bayes: ",Bayes_accuracy)
+    print("KNN: ",KNN_accuracy)
+    print("Decision Tree: ",DT_accuracy)
+      
+    
+    
+    return Bayes_accuracy,KNN_accuracy, DT_accuracy
+        
+    
+    
+#word_stemming(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\testham")
+#bag_of_words(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\testham")
+#final_bags(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\testham",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\testspam")
+#final_bags(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\ham",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\spam")
+#cal_freq_bags(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\ham",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\spam")
+#naive_Bayes(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\testham",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\testspam",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\test")
+#naive_Bayes(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\ham",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\spam",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\test")
+#k_NN(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\ham",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\spam",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\test",10)
+#build_decision_tree(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\ham",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\spam")
+#Decision_tree(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\ham",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\spam",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\test",200)
+test_accuracy(r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\ham",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\spam",r"C:\Users\Wenqing Zhong\Desktop\machine learning\homework\hw1\enron1\test",10,200)
