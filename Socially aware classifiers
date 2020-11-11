@@ -1,0 +1,512 @@
+# -*- coding: utf-8 -*-
+"""
+Created on Sat Jul 25 12:08:30 2020
+
+@author: Wenqing Zhong
+"""
+import csv
+import pandas as pd
+import numpy as np
+import math
+import random
+
+#divide the training data into two groups:recidivism=0 group and recidivism=1 group
+def separate_groups(trainfile,separate):
+
+    separateindex=-1
+    labelcol=[]
+    separatedict={}
+    separate0size=0
+    separate1size=0
+    
+    with open('%s.csv'%trainfile, 'r') as csvfile:
+        reader = csv.reader(csvfile) 
+        head=next(reader)
+        
+        for item in head:
+            separateindex=separateindex+1 #find which column includes sensitive feature
+            if separate in item:
+                break 
+        
+        for row in reader:
+            try:
+                labelcol.append(row[separateindex]) #get the label column     
+            except:
+                labelcol.append(-10)#skip empty lines
+        csvfile.seek(0)
+        
+        for i in range(len(labelcol)):
+            try:
+                separatedict[labelcol[i]].append(i+2)
+            except KeyError:
+                separatedict[labelcol[i]] = [i+2]
+        n1=trainfile+separate     
+        with open('%s0.csv'%n1, 'w',newline='') as r0file: #put all recidivism0 in a new file
+            rows0=separatedict.get("0")
+            separate0size=(len(rows0))
+            writer0 = csv.writer(r0file,quoting=csv.QUOTE_NONE)
+            writer0.writerow(head)
+            count0=0
+            for row in reader:
+                    count0=count0+1
+                    if(count0 in rows0):
+                        writer0.writerow(row)
+            csvfile.seek(0)
+        n2=trainfile+separate  
+        with open('%s1.csv'%n2, 'w',newline='') as r1file: #put all recidivism1 in a new file
+            rows1=separatedict.get("1")
+            separate1size=(len(rows1))
+            writer1 = csv.writer(r1file,quoting=csv.QUOTE_NONE)
+            writer1.writerow(head)
+            count1=0
+            for row in reader:
+                    count1=count1+1                    
+                    if(count1 in rows1):
+                        writer1.writerow(row)
+            csvfile.seek(0)
+    return  separate0size,separate1size
+
+    
+
+def feq_Bayes(rfile):
+    freq={}
+    
+    with open('%s.csv'%rfile, 'r') as csvfile:
+        reader = csv.reader(csvfile)
+        head=next(reader)
+        length = len(csvfile.readlines(  ))+1        
+        csvfile.seek(0)
+                
+        for i in range(len(head)):
+            temp={}          
+            next(reader)#skip the first row
+            for row in reader:
+               
+                try:
+                    temp[row[i]]=temp[row[i]]+1 #count frequency of each category
+                except KeyError:
+                    temp[row[i]] = 1
+            csvfile.seek(0)
+            for key,value in temp.items():
+                temp.update({key:value/length})#turn frequency into fraction
+                                  
+            freq.update({list(head)[i]:temp}) #update freq {categoryname:corresponding discrete frequency distribution dictionary}
+            
+    return freq
+
+
+
+def Naive_Bayes(trainfile,testfile,separate):
+    truelabels=[]
+    estlabels=[]
+    recidivism0size,recidivism1size=separate_groups(trainfile,separate) 
+    
+    Pr0=recidivism0size/(recidivism0size+recidivism1size)#P[Y=0]
+    Pr1=recidivism1size/(recidivism0size+recidivism1size)#P[Y=1]
+    
+    name0=trainfile+separate+"0"
+    name1=trainfile+separate+"1"
+    
+    frqr0=feq_Bayes(name0)#frequency for recidivis=0 training data
+    frqr1=feq_Bayes(name1)#frequency for recidivis=1 training data
+    
+    with open('%s.csv'%testfile, 'r') as csvfile:
+        reader = csv.reader(csvfile)
+        head=next(reader)
+        for row in reader:
+            try:
+                truelabels.append(int(row[0])) #actual label of the test sample
+                estr0=Pr0
+                estr1=Pr1
+                for i in range (1,len(row)): #skip the first column, which is the label
+                    possiblefrqs0=list(frqr0.values())[i]
+                    possiblefrqs1=list(frqr1.values())[i]
+                    
+                    if(row[i]) in list(possiblefrqs0.keys()):                        
+                        estr0=estr0*list(frqr0.values())[i].get(row[i]) #MULP[Xi=xi|Y=y]*P[Y=y]
+                        
+                    if(row[i]) in list(possiblefrqs1.keys()):                        
+                        estr1=estr1*list(frqr1.values())[i].get(row[i])
+                                            
+                if(estr0>estr1):
+                    estlabels.append(0)
+                else:
+                    estlabels.append(1)
+                
+            except:
+                continue #skip empty line
+        
+        acc= accuracy(truelabels,estlabels)        
+        print("Bayes accuracy: ",acc)
+    
+    return acc,truelabels,estlabels
+
+#put data in a list of columns (instead of rows) to calculate mean for each feature
+def get_columns(trainfile):
+    columns=[]
+    with open('%s.csv'%trainfile, 'r') as csvfile:
+        reader = csv.reader(csvfile) 
+        head=next(reader)
+        csvfile.seek(0)
+        
+        for i in range(len(head)):
+            column=[]
+            next(reader) #skip the first row
+            for row in reader:
+                column.append(int(row[i]))
+            csvfile.seek(0)
+            columns.append(column) #update columns       
+    return columns
+
+#mean calculation
+def cal_mean(trainfile):
+    columns=get_columns(trainfile)
+    mean=[]
+    for c in columns:
+        sr=pd.Series(c)
+        m=sr.mean()
+        mean.append(m)    
+    mean.pop(0) #eliminate the first feature so that det|sigma|!=0        
+    return mean
+
+#cov calculation
+def cal_mean_sigma(trainfile):
+    mean=np.array(cal_mean(trainfile))
+    M=np.zeros(len(mean))
+    with open('%s.csv'%trainfile, 'r') as csvfile:
+        reader = csv.reader(csvfile) 
+        next(reader)
+        count=0           
+        for row in reader:
+            newr=[]
+            for i in range(1,len(row)):
+                newr.append(int(row[i]))#eliminate the first feature
+            n=np.array(newr)
+            m=n-mean
+            mT=m.transpose()
+            mTm= np.outer(mT,m)
+            M=M+mTm
+            count=count+1
+        M=M/(count-1)
+        
+    return mean,M
+
+#Probability in Multivariate Gaussian distribution
+def multivariate_gauss(x, mean, sigma):
+    detsigma=np.linalg.det(sigma)
+    invsigma0=np.linalg.inv(sigma) 
+    assert(detsigma!=0)
+    P0=1/(((2* math.pi)**(len(mean)/2))) * (detsigma**(-1/2))* math.exp((-1/2) * ((x-mean).dot(invsigma0)).dot((x-mean).transpose()))
+    return P0
+
+ 
+def MLE(trainfile,testfile,separate):
+    truelabels=[]
+    estlabels=[]
+    separate_groups(trainfile,separate)
+    
+    name0=trainfile+separate+"0"
+    name1=trainfile+separate+"1"
+    
+    mean0,sigma0=cal_mean_sigma(name0)#mean, cov for recidivis=0 training data
+    mean1,sigma1=cal_mean_sigma(name1)#mean, cov for recidivis=1 training data
+   
+    with open('%s.csv'%testfile, 'r') as csvfile:
+        reader = csv.reader(csvfile) 
+        next(reader)
+        for row in reader:
+            try:
+                truelabels.append(int(row[0]))#actual label
+                newrow=[]
+                for i in range(1,len(row)):
+                    newrow.append(int(row[i]))
+                nr=np.array(newrow)
+              
+                P0= multivariate_gauss(nr, mean0, sigma0)
+                P1= multivariate_gauss(nr, mean1, sigma1)
+                
+                if(P0>P1):                    
+                    estlabels.append(0) #estimate label
+                else:
+                    estlabels.append(1)
+                    
+            except:
+                continue
+        
+        acc= accuracy(truelabels,estlabels)        
+        print("MLE accuracy: ",acc)
+    return acc,truelabels,estlabels
+    
+#calculate similarity between two samples
+def eudistance(x,y):
+    d=0
+    for i in range(1,len(x)):
+        d=d+(int(x[i])-int(y[i]))**2        
+    return d
+
+
+#get KNN, this calculation might make more than 3 minutes
+def KNN(trainfile,testfile,k):
+    truelabels=[]
+    estlabels=[]
+    
+    with open('%s.csv'%testfile, 'r') as csvfile:
+        reader1 = csv.reader(csvfile) 
+        next(reader1)
+        print("Calculating KNN...")
+        
+        for row1 in reader1:
+            if(len(row1)>0):
+                dist={"0":[],"1":[]}
+                truelabels.append(int(row1[0]))
+                                
+                with open('%s.csv'%trainfile, 'r') as tfile:
+                    reader2 = csv.reader(tfile) 
+                    next(reader2)
+                                   
+                    for row2 in reader2:
+                        if(len(row2)>0):                            
+                            d=eudistance(row1,row2)
+                            label=str(row2[0])
+                            newd=list(dist[label])
+                            newd.append(d)                            
+                            dist.update({label:newd}) #get the distances between the current testing sample and every training sample                         
+                     
+                    dist0=dist.get("0")#distances between the current testing sample and label 0 training samples
+                    dist1=dist.get("1")#distances between the current testing sample and label 1 training samples
+                   
+                    dist0.sort()
+                    dist1.sort()
+                    
+                    finaldist=[]
+                    finallabel=[]
+                    
+                    for i in range(k): # find the nearest k neighbors in each training category
+                        finaldist.append(dist0[i])
+                        finallabel.append(0)
+                        finaldist.append(dist1[i])
+                        finallabel.append(1)
+                        
+                    NNs=[] # find the nearest k neighbors in 2k neighbors regardless of categories 
+                    for j in range(k):
+                        minidx=finaldist.index(min(finaldist))
+                        p=finaldist.pop(minidx)                       
+                        minlabel=finallabel.pop(minidx)
+                        NNs.append(minlabel)
+                    
+                    
+                    count0=0
+                    count1=0
+                    for i in range(k): #check which label is the majority in kNN
+                        if(NNs[i]==0):
+                            count0=count0+1
+                        else:
+                            count1=count1+1
+                           
+                    if(count0>count1):
+                        estlabels.append(0)
+                        #print(0)
+                    else:
+                        estlabels.append(1)
+                        #print(1)
+                        
+        
+    acc= accuracy(truelabels,estlabels)        
+    print("KNN accuracy: ",acc)  
+    return acc,truelabels,estlabels
+
+#reduce some percent of training data so we can see how training size affects accuracy
+def change_training_size(trainfile,reduce):
+    
+    newtrain=trainfile+"_reduced.csv"
+    
+    deletlines=[]  
+    numlines=0
+    #randomly select "reduce" percent of training data and remove them
+    with open("%s.csv"%trainfile) as f:
+        numlines = sum(1 for line in f)
+        todelet=int(numlines*reduce)
+        print(numlines,reduce,numlines*reduce)
+        for i in range (todelet):
+            line_number = random.randrange(1,numlines)
+            deletlines.append(line_number)      
+    
+    count=0
+    with open("%s.csv"%trainfile,'r') as train0file:
+        reader = csv.reader(train0file) 
+        count2=0
+        with open(newtrain,'w',newline='') as train1file:
+            writer = csv.writer(train1file, delimiter=",", quoting=csv.QUOTE_NONE) 
+            for row in reader:
+                count=count+1
+                if (count not in deletlines):
+                    if(len(row)>0):
+                        writer.writerow(row)
+                        count2=count2+1
+    return
+    
+    
+#check accuracy of a classifier   
+def accuracy(truelabels,estlabels):
+    mistake=0
+    for i in range(len(truelabels)):
+        if(truelabels[i]!=estlabels[i]):
+            mistake=mistake+1
+    
+    accuracy=1-mistake/len(truelabels)
+    return accuracy
+
+ #test Naive Bayes and KNN in different training sample size  
+def train_size(reduce):
+    change_training_size("propublicaTrain",reduce)
+    try:
+        Naive_Bayes("propublicaTrain_reduced","propublicaTest","two_year_recid")
+    except:
+        train_size(reduce)
+    KNN("propublicaTrain_reduced","propublicaTest",17)
+    return   
+
+#calculate fairness    
+def Cal_DP_EO_PP_fiarness(acc0,true0,est0,acc1,true1,est1):
+    print("For race0:")
+    
+    t00=0
+    e00=0
+    t01=0
+    e01=0
+    for a in range(len(true0)):
+        if (true0[a]==0):
+            t00=t00+1
+            if(est0[a]==0):
+                e00=e00+1
+        else:
+            t01=t01+1
+            if(est0[a]==1):
+                e01=e01+1
+    truepos0=e01/t01
+    trueneg0=e00/t00
+    print("EO_true positive: ",truepos0)
+    print("EO_true negative: ",trueneg0)
+    
+    
+    count0=0
+    for i in est0:
+        if(i==1):
+            count0=count0+1
+    DP0=count0/len(est0)
+    print("DP_positive rate:",DP0)
+    
+    numest00=0
+    numtrue00=0
+    numest01=0
+    numtrue01=0
+    for j in range(len(est0)):
+        if(est0[j]==0):
+            numest00=numest00+1
+            if(true0[j]==0):
+                numtrue00=numtrue00+1                
+        else:
+            numest01=numest01+1
+            if(true0[j]==1):
+                numtrue01=numtrue01+1 
+    Y0y0race0=numtrue00/numest00
+    Y1y1race0=numtrue01/numest01
+    print("PP_positive predictive: ",Y1y1race0)
+    print("PP_negative predictive: ",Y0y0race0)
+    
+    print("For race1:")
+    
+    t10=0
+    e10=0
+    t11=0
+    e11=0
+    for b in range(len(true1)):
+        if (true1[b]==0):
+            t10=t10+1
+            if(est1[b]==0):
+                e10=e10+1
+        else:
+            t11=t11+1
+            if(est1[b]==1):
+                e11=e11+1
+    truepos1=e11/t11
+    trueneg1=e10/t10
+    print("EO_true positive: ",truepos1)
+    print("EO_true negative: ",trueneg1)    
+    
+    count1=1    
+    for k in est1:
+        if(k==1):
+            count1=count1+1    
+    DP1=count1/len(est1)   
+    print("DP_positive rate:",DP1)
+    
+    numest01=0
+    numtrue01=0
+    numest11=0
+    numtrue11=0
+    for h in range(len(est1)):
+        if(est1[h]==0):
+            numest01=numest01+1
+            if(true1[h]==0):
+                numtrue01=numtrue01+1                
+        else:
+            numest11=numest11+1
+            if(true1[h]==1):
+                numtrue11=numtrue11+1 
+                
+    Y0y0race1=numtrue01/numest01
+    Y1y1race1=numtrue11/numest11
+    print("PP_positive predictive: ",Y1y1race1)
+    print("PP_negative predictive: ",Y0y0race1)
+    
+    DP_diff=abs(DP0-DP1)
+    EO_diff=abs(truepos0-truepos1)+abs(trueneg0-trueneg1)
+    PP_diff=abs(Y1y1race0-Y1y1race1)+abs(Y0y0race0-Y0y0race1)
+    Total_diff=(DP_diff+EO_diff+PP_diff)
+    
+    print("DP_diff",DP_diff)
+    print("EO_diff",EO_diff)
+    print("PP_diff",PP_diff)
+    print("Total_diff",Total_diff)
+    
+    return DP_diff,EO_diff,PP_diff,Total_diff
+
+'''
+TO CALCULATE ACCURACY OF A CLASSIFIER
+'''
+#cal_MLE("propublicaTrain","propublicaTest","two_year_recid")
+#Naive_Bayes("propublicaTrain","propublicaTestrace0","two_year_recid")
+#KNN("propublicaTrain","propublicaTestrace0",17)
+    
+'''
+TO GET THE DEGREE OF FAIRNESS FOR A CLASSIFIER
+'''
+separate_groups("propublicaTest","race")
+
+acc0,true0,est0=Naive_Bayes("propublicaTrain","propublicaTestrace0","two_year_recid")
+acc1,true1,est1=Naive_Bayes("propublicaTrain","propublicaTestrace1","two_year_recid")  
+
+#acc0,true0,est0=MLE("propublicaTrain","propublicaTestrace0","two_year_recid")
+#acc1,true1,est1=MLE("propublicaTrain","propublicaTestrace1","two_year_recid")  
+
+#acc0,true0,est0=KNN("propublicaTrain","propublicaTestrace0",17)
+#acc1,true1,est1=KNN("propublicaTrain","propublicaTestrace1",17)  
+
+Cal_DP_EO_PP_fiarness(acc0,true0,est0,acc1,true1,est1)
+
+'''
+TO GET INFO OF RACE IN TRAINING DATA 
+change_training_size("propublicaTrain",0.3)
+r0,r1=separate_groups("propublicaTrain_reduced","race")
+print("race0 size:",r0)
+print("race1 size:",r1)
+
+r00,r01=separate_groups("propublicaTrain_reducedtwo_year_recid0","race")
+print("race0 size in two_year_recid0 :",r00)
+print("race1 size in two_year_recid0:",r01)
+
+r10,r11=separate_groups("propublicaTrain_reducedtwo_year_recid1","race")
+print("race0 size in two_year_recid1 :",r10)
+print("race1 size in two_year_recid1:",r11)
+'''
